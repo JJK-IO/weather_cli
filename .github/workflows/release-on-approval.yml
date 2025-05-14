@@ -2,14 +2,16 @@ name: Release on Approval
 
 on:
   issue_comment:
-    types: [created]  # Trigger on issue comment creation
+    types: [created]
 
 jobs:
   release-if-approved:
     if: |
-      github.event.comment.body == '/approve-release' && 
+      github.event.comment.body == '/approve-release' &&
       github.event.comment.user.login == 'JJK-IO'
     runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump-version.outputs.new }}
 
     steps:
       - name: Checkout code
@@ -32,10 +34,7 @@ jobs:
 
       - name: Update Cargo.toml Version
         run: |
-          # Update version in Cargo.toml
           sed -i "s/^version = \".*\"/version = \"${{ steps.bump-version.outputs.new }}\"/" Cargo.toml
-          
-          # Commit the version change
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git commit -am "chore: bump version to ${{ steps.bump-version.outputs.new }}"
@@ -53,27 +52,57 @@ jobs:
               issue_number: issueNumber,
               labels: ['release-approved']
             });
+            // Close the issue
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              state: 'closed'
+            });
 
       - name: Tag the new version
         run: |
-          # Tag the new version
           git tag "v${{ steps.bump-version.outputs.new }}"
           git push origin "v${{ steps.bump-version.outputs.new }}"
 
-      - name: Build Release
-        run: cargo build --release
+  build-and-release:
+    needs: release-if-approved
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: weather_cli
+            out_name: weather_cli-linux
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: weather_cli
+            out_name: weather_cli-macos
 
-      - name: Create GitHub Release
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions/setup-rust@v1
+        with:
+          rustup-components: rust-src
+
+      - name: Add target (if cross-compiling)
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.out_name }}
+          chmod +x ${{ matrix.out_name }}
+
+      - name: Upload binary to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.bump-version.outputs.new }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Binary to Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ steps.bump-version.outputs.new }}
-          files: target/release/your_binary_name  # Replace with your actual binary name
+          tag_name: v${{ needs.release-if-approved.outputs.new_version }}
+          files: ${{ matrix.out_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
