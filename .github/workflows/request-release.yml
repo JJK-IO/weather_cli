@@ -17,33 +17,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get Current Version
-        id: get-version
-        run: |
-          version=$(grep '^version =' Cargo.toml | head -n 1 | cut -d '"' -f2)
-          echo "current=$version" >> $GITHUB_OUTPUT
-
-      - name: Bump Patch Version
-        id: bump-version
-        run: |
-          current="${{ steps.get-version.outputs.current }}"
-          IFS='.' read -r major minor patch <<< "$current"
-          patch=$((patch + 1))
-          new_version="$major.$minor.$patch"
-          echo "new=$new_version" >> $GITHUB_OUTPUT
-
-      - name: Update Cargo.toml Version
-        run: |
-          # Update version in Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"${{ steps.bump-version.outputs.new }}\"/" Cargo.toml
-          cargo update
-          
-          # Commit the version change
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git commit -am "chore: bump version to ${{ steps.bump-version.outputs.new }}"
-          git push origin main
-
       - name: Create Release Approval Issue
         uses: actions/github-script@v7
         with:
