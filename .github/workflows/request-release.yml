@@ -36,6 +36,7 @@ jobs:
         run: |
           # Update version in Cargo.toml
           sed -i "s/^version = \".*\"/version = \"${{ steps.bump-version.outputs.new }}\"/" Cargo.toml
+          cargo update
           
           # Commit the version change
           git config user.name "github-actions"
