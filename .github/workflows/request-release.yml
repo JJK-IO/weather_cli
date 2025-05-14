@@ -1,0 +1,34 @@
+name: Request Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  prompt-for-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Release Approval Issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueTitle = `Confirm Release for Commit: ${context.sha}`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'release-pending'
+            });
+
+            const existing = issues.find(issue => issue.title.includes(context.sha));
+            if (!existing) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: `A commit was pushed to \`main\`. Do you want to tag and release a new version?\n\nCommit: \`${context.sha}\``,
+                labels: ['release-pending']
+              });
+            }

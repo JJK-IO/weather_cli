@@ -1,0 +1,58 @@
+name: Release on Approval
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  release-if-approved:
+    if: github.event.label.name == 'release-approved'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions/setup-rust@v1
+
+      - name: Get Current Version
+        id: get-version
+        run: |
+          version=$(grep '^version =' Cargo.toml | head -n 1 | cut -d '"' -f2)
+          echo "current=$version" >> $GITHUB_OUTPUT
+
+      - name: Bump Patch Version
+        id: bump-version
+        run: |
+          current="${{ steps.get-version.outputs.current }}"
+          IFS='.' read -r major minor patch <<< "$current"
+          patch=$((patch + 1))
+          new_version="$major.$minor.$patch"
+          echo "new=$new_version" >> $GITHUB_OUTPUT
+
+      - name: Update Cargo.toml Version
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ steps.bump-version.outputs.new }}\"/" Cargo.toml
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git commit -am "chore: bump version to ${{ steps.bump-version.outputs.new }}"
+          git tag v${{ steps.bump-version.outputs.new }}
+          git push origin main --tags
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.bump-version.outputs.new }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Binary
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.bump-version.outputs.new }}
+          files: target/release/weather_cli
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
