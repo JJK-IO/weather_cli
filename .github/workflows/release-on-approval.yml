@@ -1,13 +1,16 @@
 name: Release on Approval
 
 on:
-  issues:
-    types: [labeled]
+  issue_comment:
+    types: [created]  # Trigger on issue comment creation
 
 jobs:
   release-if-approved:
-    if: github.event.label.name == 'release-approved'
+    if: |
+      github.event.comment.body == '/approve-release' && 
+      github.event.comment.user.login == 'JJK-IO'
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,14 +35,35 @@ jobs:
 
       - name: Update Cargo.toml Version
         run: |
+          # Update version in Cargo.toml
           sed -i "s/^version = \".*\"/version = \"${{ steps.bump-version.outputs.new }}\"/" Cargo.toml
+          
+          # Commit the version change
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git commit -am "chore: bump version to ${{ steps.bump-version.outputs.new }}"
-          git tag v${{ steps.bump-version.outputs.new }}
-          git push origin main --tags
+          git push origin main
 
-      - name: Build
+      - name: Add release-approved label
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = github.event.issue.number;
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ['release-approved']
+            });
+
+      - name: Tag the new version
+        run: |
+          # Tag the new version
+          git tag "v${{ steps.bump-version.outputs.new }}"
+          git push origin "v${{ steps.bump-version.outputs.new }}"
+
+      - name: Build Release
         run: cargo build --release
 
       - name: Create GitHub Release
@@ -49,10 +73,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Binary
+      - name: Upload Binary to Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.bump-version.outputs.new }}
-          files: target/release/weather_cli
+          files: target/release/your_binary_name  # Replace with your actual binary name
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
