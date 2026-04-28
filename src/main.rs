@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use reqwest::blocking::Client;
-use serde::Deserialize;
-use tabled::{Table, Tabled};
+use weather_cli::{display, location, weather};
 
 #[derive(Parser)]
 #[command(name = "weather")]
@@ -10,158 +9,70 @@ use tabled::{Table, Tabled};
 struct Args {
     /// Latitude
     #[arg(short = 'a', long)]
-    lat: f64,
+    lat: Option<f64>,
 
     /// Longitude
     #[arg(short = 'o', long)]
-    lon: f64,
-}
+    lon: Option<f64>,
 
-#[derive(Debug, Deserialize)]
-struct PointsResponse {
-    properties: PointProperties,
-}
-
-#[derive(Debug, Deserialize)]
-struct PointProperties {
-    forecast: String,
-    #[serde(rename = "forecastHourly")]
-    forecast_hourly: String,
-    // #[serde(rename = "gridId")]
-    // grid_id: String,
-    // #[serde(rename = "gridX")]
-    // grid_x: i32,
-    // #[serde(rename = "gridY")]
-    // grid_y: i32,
-}
-
-#[derive(Debug, Deserialize)]
-struct ForecastResponse {
-    properties: ForecastProperties,
-}
-
-#[derive(Debug, Deserialize)]
-struct ForecastProperties {
-    periods: Vec<ForecastPeriod>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ForecastPeriod {
-    name: String,
-    #[serde(rename = "detailedForecast")]
-    detailed_forecast: String,
-    // temperature: i32,
-    // #[serde(rename = "temperatureUnit")]
-    // temperature_unit: String,
-    // #[serde(rename = "windSpeed")]
-    // wind_speed: String,
-    // #[serde(rename = "windDirection")]
-    // wind_direction: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct HourlyForecastResponse {
-    properties: HourlyForecastProperties,
-}
-
-#[derive(Debug, Deserialize)]
-struct HourlyForecastProperties {
-    periods: Vec<HourlyForecastPeriod>,
-}
-
-#[derive(Debug, Deserialize)]
-struct HourlyForecastPeriod {
-    #[serde(rename = "startTime")]
-    start_time: String,
-    temperature: i32,
-    #[serde(rename = "temperatureUnit")]
-    temperature_unit: String,
-    #[serde(rename = "shortForecast")]
-    short_forecast: String,
-    #[serde(rename = "windSpeed")]
-    wind_speed: String,
-    #[serde(rename = "windDirection")]
-    wind_direction: String,
-    #[serde(rename = "probabilityOfPrecipitation")]
-    probability_of_precipitation: PrecipitationValue,
-}
-
-#[derive(Debug, Deserialize)]
-struct PrecipitationValue {
-    value: Option<i32>,
-}
-
-#[derive(Tabled)]
-struct HourlyTableForecast {
-    time: String,
-    temperature: String,
-    precip: String,
-    wind: String,
-    forecast: String,
+    /// Show verbose diagnostics (IP/location resolution details)
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     let client = Client::new();
 
+    // Get latitude and longitude
+    let (lat, lon) = match (args.lat, args.lon) {
+        (Some(lat), Some(lon)) => (lat, lon),
+        _ => {
+            // If lat/lon not provided, fetch from IP
+            location::get_location_from_ip(&client, args.verbose)?
+        }
+    };
+
+    if args.verbose {
+        println!("Using location: lat={}, lon={}\n", lat, lon);
+    }
+
     // Get gridpoint info
-    let points_url = format!("https://api.weather.gov/points/{},{}", args.lat, args.lon);
-    let points_resp: PointsResponse = client.get(&points_url)
-        .header("User-Agent", "rust-weather-cli")
-        .send()?
-        .json()?;
+    let points_resp = weather::get_points(&client, lat, lon)?;
+
+    display::print_location_header(&points_resp.properties);
 
     // Get regular forecast
-    let forecast_resp: ForecastResponse = client.get(&points_resp.properties.forecast)
-        .header("User-Agent", "rust-weather-cli")
-        .send()?
-        .json()?;
+    let forecast_resp = weather::get_forecast(&client, &points_resp.properties.forecast)?;
 
     // Print first forecast in regular format (today and tonight)
     println!("Weather Summary:");
-    for period in &forecast_resp.properties.periods[..2] {
+    for period in forecast_resp.properties.periods.iter().take(2) {
         println!("{}: {}", period.name, period.detailed_forecast);
     }
-    
+
+    println!("\nNext 7 Days:");
+    let seven_day: Vec<display::DailyTableForecast> =
+        display::build_seven_day_forecast(&forecast_resp.properties.periods);
+
+    display::print_daily_forecast(&seven_day);
+
     // Get hourly forecast
-    let hourly_forecast_resp: HourlyForecastResponse = client.get(&points_resp.properties.forecast_hourly)
-        .header("User-Agent", "rust-weather-cli")
-        .send()?
-        .json()?;
-    
+    let hourly_forecast_resp =
+        weather::get_hourly_forecast(&client, &points_resp.properties.forecast_hourly)?;
+
     println!("\n12-Hour Hourly Forecast:");
-    
-    // Format time strings from ISO format
-    let table_data: Vec<HourlyTableForecast> = hourly_forecast_resp.properties.periods
+
+    // Format and display hourly forecast
+    let table_data: Vec<display::HourlyTableForecast> = hourly_forecast_resp
+        .properties
+        .periods
         .iter()
-        .take(12) // Take next 12 hours
-        .map(|period| {
-            // Parse the ISO datetime and format it as a readable time
-            let datetime = period.start_time.clone();
-            let time = if let Some(t) = datetime.split('T').nth(1) {
-                t.split('-').next().unwrap_or(&datetime).split('+').next().unwrap_or(&datetime)
-            } else {
-                &datetime
-            };
-            
-            // Format precipitation chance
-            let precip_chance = match period.probability_of_precipitation.value {
-                Some(value) => format!("{}%", value),
-                None => "N/A".to_string(),
-            };
-            
-            HourlyTableForecast {
-                time: time.to_string(),
-                temperature: format!("{}°{}", period.temperature, period.temperature_unit),
-                precip: precip_chance,
-                wind: format!("{} {}", period.wind_speed, period.wind_direction),
-                forecast: period.short_forecast.clone(),
-            }
-        })
+        .take(12)
+        .map(|period| display::format_hourly_forecast(period))
         .collect();
-    
-    let table = Table::new(table_data).to_string();
-    println!("{}", table);
+
+    display::print_hourly_forecast(&table_data);
 
     Ok(())
 }
