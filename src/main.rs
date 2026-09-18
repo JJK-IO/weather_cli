@@ -69,7 +69,7 @@ fn main() -> Result<()> {
         .periods
         .iter()
         .take(12)
-        .map(|period| display::format_hourly_forecast(period))
+        .map(display::format_hourly_forecast)
         .collect();
 
     display::print_hourly_forecast(&table_data);
